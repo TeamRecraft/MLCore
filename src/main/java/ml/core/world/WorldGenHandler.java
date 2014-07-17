@@ -1,9 +1,10 @@
 package ml.core.world;
 
+import java.util.ArrayList;
 import java.util.Collection;
-import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Random;
 
 import ml.core.internal.CoreLogger;
@@ -15,17 +16,17 @@ import net.minecraft.world.World;
 import net.minecraft.world.WorldSavedData;
 import net.minecraft.world.chunk.Chunk;
 import net.minecraft.world.chunk.IChunkProvider;
-import net.minecraftforge.event.ForgeSubscribe;
 import net.minecraftforge.event.world.ChunkEvent;
 
 import com.google.common.collect.HashMultimap;
 import com.google.common.collect.Multimap;
 
-import cpw.mods.fml.common.ITickHandler;
 import cpw.mods.fml.common.IWorldGenerator;
-import cpw.mods.fml.common.TickType;
+import cpw.mods.fml.common.eventhandler.SubscribeEvent;
+import cpw.mods.fml.common.gameevent.TickEvent;
+import cpw.mods.fml.common.gameevent.TickEvent.Phase;
 
-public class WorldGenHandler implements IWorldGenerator, ITickHandler {
+public class WorldGenHandler implements IWorldGenerator {
 
 	public static final WorldGenHandler instance = new WorldGenHandler();
 	private final Multimap<String, IFeatureGenerator> genFeatures = HashMultimap.create();
@@ -37,7 +38,7 @@ public class WorldGenHandler implements IWorldGenerator, ITickHandler {
 		genFeatures.put(modId, gen);
 	}
 	
-	@ForgeSubscribe
+	@SubscribeEvent
 	public void handleChunkLoad(ChunkEvent.Load evt) {
 		World w = evt.world;
 		Chunk c = evt.getChunk();
@@ -53,13 +54,52 @@ public class WorldGenHandler implements IWorldGenerator, ITickHandler {
 			for (IFeatureGenerator feat : genFeatures.get(modId)) {
 				if (feat.allowRetroGen(w, x, z) && feat.canGenerateInWorld(w) && rdb.shouldPerformRetroJob(x, z, feat.getGenIdentifier(), feat.getFeatureVersion())) {
 					RetroQueueItem rqi = new RetroQueueItem(x, z, w, feat, rdb.getLastFeatureVesrion(x, z, feat.getGenIdentifier()), rdb);
-					CoreLogger.info("Chunk @ ("+x+","+z+",DIM"+w.provider.dimensionId+") has been marked for retroactive feature generation for ("+modId+":"+feat.getGenIdentifier()+")");
-					genQueue.put(dimid, rqi);
+					synchronized(this) {
+						CoreLogger.info("Chunk @ ("+x+","+z+",DIM"+w.provider.dimensionId+") has been marked for retroactive feature generation for ("+modId+":"+feat.getGenIdentifier()+")");
+						genQueue.put(dimid, rqi);
+					}
 				}
 			}
 		}
 	}
 
+	public void tickWorld(TickEvent.WorldTickEvent evt) {
+		if (evt.phase == Phase.END) {
+			World world = evt.world;
+			int dimid = world.provider.dimensionId;
+			
+			synchronized (this) {
+				if (genQueue.get(dimid).size() > 0) {
+					List<RetroQueueItem> subQ = new ArrayList<WorldGenHandler.RetroQueueItem>(genQueue.removeAll(dimid));
+					Iterator<RetroQueueItem> iter = subQ.iterator();
+					
+					int count=0;
+					while (iter.hasNext()) {
+						RetroQueueItem rqi = iter.next();
+						iter.remove();
+						
+						long worldSeed = world.getSeed();
+						Random rand = new Random(worldSeed);
+						long xSeed = rand.nextLong() >> 2 + 1L;
+						long zSeed = rand.nextLong() >> 2 + 1L;
+						long chunkSeed = (xSeed * rqi.chunkX + zSeed * rqi.chunkZ) ^ worldSeed;
+						rand.setSeed(chunkSeed);
+						
+						rqi.feature.doPopulate(rand, rqi.chunkX, rqi.chunkZ, world, true, rqi.lastVer);
+						rqi.rdb.markRetroJobDone(rqi.chunkX, rqi.chunkZ, rqi.feature.getGenIdentifier(), rqi.feature.getFeatureVersion());
+						
+						count++;
+						if (count > 32)
+							break;
+					}
+					
+					genQueue.putAll(dimid, subQ);
+					CoreLogger.info(count+" chunks have been retro-generated. "+genQueue.get(dimid).size()+" more left.");
+				}
+			}
+		}
+	}
+	
 	/**
 	 * Standard, first-time chunk generation.
 	 */
@@ -71,7 +111,7 @@ public class WorldGenHandler implements IWorldGenerator, ITickHandler {
 			
 			for (IFeatureGenerator feature : features) {
 				if (feature.canGenerateInWorld(world)) {
-					feature.doGeneration(rand, chunkX, chunkZ, world, false, -1);
+					feature.doPopulate(rand, chunkX, chunkZ, world, false, -1);
 					rdb.markRetroJobDone(chunkX, chunkZ, feature.getGenIdentifier(), feature.getFeatureVersion());
 				}
 			}
@@ -86,51 +126,6 @@ public class WorldGenHandler implements IWorldGenerator, ITickHandler {
 			CoreLogger.info("Created retro generation database for DIM"+w.provider.dimensionId);
 		}
 		return rdb;
-	}
-	
-	@Override
-	public void tickStart(EnumSet<TickType> type, Object... tickData) {}
-
-	@Override
-	public void tickEnd(EnumSet<TickType> type, Object... tickData) {
-		World world = (World)tickData[0];
-		int dimid = world.provider.dimensionId;
-		
-		if (genQueue.get(dimid).size() > 0) {
-			Iterator<RetroQueueItem> iter = genQueue.get(dimid).iterator();
-
-			int count=0;
-			while (iter.hasNext()) {
-				RetroQueueItem rqi = iter.next();
-				iter.remove();
-				
-				long worldSeed = world.getSeed();
-				Random rand = new Random(worldSeed);
-				long xSeed = rand.nextLong() >> 2 + 1L;
-				long zSeed = rand.nextLong() >> 2 + 1L;
-				long chunkSeed = (xSeed * rqi.chunkX + zSeed * rqi.chunkZ) ^ worldSeed;
-				rand.setSeed(chunkSeed);
-				
-				rqi.feature.doGeneration(rand, rqi.chunkX, rqi.chunkZ, world, true, rqi.lastVer);
-				rqi.rdb.markRetroJobDone(rqi.chunkX, rqi.chunkZ, rqi.feature.getGenIdentifier(), rqi.feature.getFeatureVersion());
-				
-				count++;
-				if (count > 32)
-					break;
-			}
-
-			CoreLogger.info(count+" chunks have been retro-generated. "+genQueue.get(dimid).size()+" more left.");
-		}
-	}
-
-	@Override
-	public EnumSet<TickType> ticks() {
-		return EnumSet.of(TickType.WORLD);
-	}
-
-	@Override
-	public String getLabel() {
-		return "MLCore:WorldGen";
 	}
 	
 	private static class RetroQueueItem {
@@ -162,7 +157,7 @@ public class WorldGenHandler implements IWorldGenerator, ITickHandler {
 	}
 	
 	//Credit to ProjectRed for most of this bit.
-	private static class RetroDataBase extends WorldSavedData {
+	public static class RetroDataBase extends WorldSavedData {
 
 		private HashMap<Vector2i, NBTTagCompound> chunks = new HashMap<Vector2i, NBTTagCompound>();
 		
@@ -191,9 +186,9 @@ public class WorldGenHandler implements IWorldGenerator, ITickHandler {
 
 		@Override
 		public void readFromNBT(NBTTagCompound nbt) {
-			NBTTagList lst = (NBTTagList)nbt.getTagList("chunks");
+			NBTTagList lst = (NBTTagList)nbt.getTagList("chunks", 10);
 			for (int i=0; i<lst.tagCount(); i++) {
-				NBTTagCompound tag = (NBTTagCompound)lst.tagAt(i);
+				NBTTagCompound tag = lst.getCompoundTagAt(i);
 				chunks.put(new Vector2i(tag.getInteger("x"), tag.getInteger("z")), tag.getCompoundTag("manifest"));
 			}
 		}
@@ -205,7 +200,7 @@ public class WorldGenHandler implements IWorldGenerator, ITickHandler {
 				NBTTagCompound tg = new NBTTagCompound();
 				tg.setInteger("x", i.x);
 				tg.setInteger("z", i.y);
-				tg.setCompoundTag("manifest", chunks.get(i));
+				tg.setTag("manifest", chunks.get(i));
 				lst.appendTag(tg);
 			}
 			nbt.setTag("chunks", lst);

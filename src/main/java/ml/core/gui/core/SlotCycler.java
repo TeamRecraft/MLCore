@@ -58,7 +58,7 @@ public class SlotCycler {
 		return cycleSlot(cslot.getSlot(), cslot);
 	}
 	
-	public boolean tryCycleSlot(Slot slot) {
+	public boolean cycleSlot(Slot slot) {
 		if (slot instanceof MLSlot && ((MLSlot)slot).controlSlot != null) {
 			ControlSlot cslot = ((MLSlot)slot).controlSlot;
 			return cycleSlot(slot, cslot);

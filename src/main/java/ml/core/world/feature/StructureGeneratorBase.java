@@ -2,6 +2,7 @@ package ml.core.world.feature;
 
 import java.util.Random;
 
+import net.minecraft.block.Block;
 import net.minecraft.world.World;
 import net.minecraft.world.chunk.IChunkProvider;
 import net.minecraft.world.gen.structure.MapGenStructure;
@@ -9,15 +10,15 @@ import net.minecraft.world.gen.structure.MapGenStructure;
 public abstract class StructureGeneratorBase extends MapGenStructure implements IFeatureGenerator {
 
 	@Override
-	public boolean doGeneration(Random rand, int chunkX, int chunkZ, World world, boolean isRetroGen, int oldVersion) {
-		generate(world.getChunkProvider(), world, chunkX, chunkZ, null);
+	public boolean doPopulate(Random rand, int chunkX, int chunkZ, World world, boolean isRetroGen, int oldVersion) {
+		func_151539_a(world.getChunkProvider(), world, chunkX, chunkZ, null);
 		return generateStructuresInChunk(world, rand, chunkX, chunkZ);
 	}
-
+	
 	@Override
-	public void generate(IChunkProvider par1iChunkProvider, World world, int chunkX, int chunkZ, byte[] par5ArrayOfByte) {
+	public void func_151539_a(IChunkProvider par1iChunkProvider, World world, int chunkX, int chunkZ, Block[] blocks) {
 		if (canGenerateInWorld(world))
-			super.generate(par1iChunkProvider, world, chunkX, chunkZ, par5ArrayOfByte);
+			super.func_151539_a(par1iChunkProvider, world, chunkX, chunkZ, blocks);
 	}
 	
 	@Override
